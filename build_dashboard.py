@@ -273,13 +273,28 @@ def calculate_metrics(daily):
     metrics["ARMS_A_MA5"] = metrics["ARMS_A"].rolling(5, min_periods=3).mean()
     metrics["LogARMS_A"] = np.log(metrics["ARMS_A"])
 
-    index_frame = em.index_history("000300", START_DATE, END_DATE)
-    index_frame["日期"] = pd.to_datetime(index_frame["日期"])
-    index_frame["沪深300涨跌幅"] = pd.to_numeric(index_frame["涨跌幅"], errors="coerce")
-    metrics = metrics.merge(index_frame[["日期", "沪深300涨跌幅"]], on="日期", how="left")
+    try:
+        index_frame = em.index_history("000300", START_DATE, END_DATE)
+        index_frame["日期"] = pd.to_datetime(index_frame["日期"])
+        index_frame["沪深300涨跌幅"] = pd.to_numeric(index_frame["涨跌幅"], errors="coerce")
+        index_series = index_frame[["日期", "沪深300涨跌幅"]]
+    except Exception as exc:
+        if not METRICS_FILE.exists():
+            raise
+        print(f"沪深300更新不可用，使用指标缓存：{type(exc).__name__}: {exc}", flush=True)
+        cached = pd.read_csv(METRICS_FILE)
+        cached["日期"] = pd.to_datetime(cached["日期"])
+        index_series = cached[["日期", "沪深300涨跌幅"]]
+    metrics = metrics.merge(index_series, on="日期", how="left")
     metrics["权重个股偏离"] = metrics["沪深300涨跌幅"] - metrics["个股收益中位数"]
 
-    margin = em.margin_account_info()
+    try:
+        margin = em.margin_account_info()
+    except Exception as exc:
+        if not METRICS_FILE.exists():
+            raise
+        print(f"两融更新不可用，使用指标缓存：{type(exc).__name__}: {exc}", flush=True)
+        margin = pd.read_csv(METRICS_FILE)[["日期", "融资余额", "融资买入额", "平均维持担保比例"]]
     margin["日期"] = pd.to_datetime(margin["日期"])
     for column in ["融资余额", "融资买入额", "平均维持担保比例"]:
         margin[column] = pd.to_numeric(margin[column], errors="coerce")
