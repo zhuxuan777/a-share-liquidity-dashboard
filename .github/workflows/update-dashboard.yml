@@ -40,7 +40,7 @@ jobs:
         run: python -m pip install -r requirements.txt
 
       - name: Check Python syntax
-        run: python -m py_compile build_dashboard.py us_modules.py
+        run: python -m py_compile build_dashboard.py eastmoney.py us_modules.py
 
       - name: Restore generated data cache
         uses: actions/cache@v4
@@ -56,8 +56,10 @@ jobs:
         run: |
           mkdir -p _site/data
           cp index.html _site/index.html
-          cp data/market_metrics.csv data/latest_stock_snapshot.csv data/us_current_signals.json _site/data/
+          cp data/market_metrics.csv data/latest_stock_snapshot.csv _site/data/
+          if [ -f data/us_current_signals.json ]; then cp data/us_current_signals.json _site/data/; fi
           python - <<'PY'
+          import csv
           import json
           import os
           from datetime import datetime
@@ -66,7 +68,10 @@ jobs:
 
           html = Path('index.html').read_text(encoding='utf-8')
           assert 'A股流动性与市场宽度看板' in html
+          with open('data/market_metrics.csv', encoding='utf-8-sig') as handle:
+              metrics = list(csv.DictReader(handle))
           status = {
+              'market_date': metrics[-1]['日期'],
               'generated_at': datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),
               'timezone': 'Asia/Shanghai',
               'run_id': os.environ.get('GITHUB_RUN_ID'),
