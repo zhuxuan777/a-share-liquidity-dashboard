@@ -73,9 +73,10 @@ def kline_frame(data, code):
     return frame
 
 
-def tencent_stock_history(code, start_date, end_date):
-    market = "sh" if code.startswith("6") else ("bj" if code.startswith(("4", "8", "9")) else "sz")
-    symbol = market + code
+def tencent_stock_history(code, start_date, end_date, symbol=None):
+    if symbol is None:
+        market = "sh" if code.startswith("6") else ("bj" if code.startswith(("4", "8", "9")) else "sz")
+        symbol = market + code
     start = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
     end = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
     url = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
@@ -144,20 +145,28 @@ def stock_history(code, start_date, end_date):
 
 def index_history(code, start_date, end_date):
     market = 1 if code.startswith(("0", "9")) else 0
-    data = get_json(
-        "https://push2his.eastmoney.com/api/qt/stock/kline/get",
-        {
-            "fields1": "f1,f2,f3,f4,f5,f6",
-            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-            "ut": UT,
-            "klt": "101",
-            "fqt": "0",
-            "secid": f"{market}.{code}",
-            "beg": start_date,
-            "end": end_date,
-        },
-    ).get("data")
-    return kline_frame(data, code)
+    try:
+        data = get_json(
+            "https://push2his.eastmoney.com/api/qt/stock/kline/get",
+            {
+                "fields1": "f1,f2,f3,f4,f5,f6",
+                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+                "ut": UT,
+                "klt": "101",
+                "fqt": "0",
+                "secid": f"{market}.{code}",
+                "beg": start_date,
+                "end": end_date,
+            },
+            retries=1,
+        ).get("data")
+        frame = kline_frame(data, code)
+        if not frame.empty:
+            return frame
+    except (requests.RequestException, ValueError, KeyError):
+        pass
+    symbol = ("sh" if code.startswith(("000", "999")) else "sz") + code
+    return tencent_stock_history(code, start_date, end_date, symbol=symbol)
 
 
 def margin_account_info():
