@@ -146,6 +146,49 @@ def load_or_fetch(refresh, workers, limit):
     return daily, failure_frame, active_spot
 
 
+def load_snapshot_update():
+    if not CACHE_FILE.exists():
+        raise RuntimeError("快照更新需要已有的全A历史缓存")
+    daily = pd.read_csv(CACHE_FILE, dtype={"代码": str})
+    daily["日期"] = pd.to_datetime(daily["日期"])
+    cached_latest = daily["日期"].max()
+    names = pd.read_csv(BOOTSTRAP_FILE, dtype={"代码": str})
+    try:
+        index = em.index_history("000300", (cached_latest.date() - dt.timedelta(days=5)).strftime("%Y%m%d"), END_DATE)
+        index_dates = pd.to_datetime(index["日期"])
+        market_date = index_dates.max()
+        missing_sessions = int((index_dates > cached_latest).sum())
+        if missing_sessions > 1:
+            raise RuntimeError(f"缓存之后缺少 {missing_sessions} 个交易日，需要全量补历史")
+        spot = fetch_spot_with_retry()
+        spot["代码"] = spot["代码"].astype(str).str.zfill(6)
+        spot = spot[spot["代码"].str.fullmatch(r"\d{6}")].drop_duplicates("代码")
+        active_spot = spot[spot["最新价"].notna()].copy()
+        current = active_spot.rename(columns={
+            "今开": "开盘", "最新价": "收盘",
+        }).copy()
+        current["日期"] = market_date
+        current["股票代码"] = current["代码"]
+        columns = ["日期", "代码", "股票代码", "开盘", "收盘", "最高", "最低", "成交量", "成交额", "振幅", "涨跌幅", "涨跌额", "换手率"]
+        current = current[columns]
+        daily = daily[daily["日期"] < market_date]
+        daily = pd.concat([daily, current], ignore_index=True)
+        daily = daily.sort_values(["代码", "日期"]).reset_index(drop=True)
+        daily.to_csv(CACHE_FILE, index=False, compression="gzip", encoding="utf-8-sig")
+        active_spot.to_csv(LATEST_FILE, index=False, encoding="utf-8-sig")
+        spot[["代码", "名称"]].to_csv(BOOTSTRAP_FILE, index=False, encoding="utf-8-sig")
+        print(f"快照更新完成：{market_date.date()}，{len(current)} 只有行情股票", flush=True)
+        return daily, pd.DataFrame(columns=["代码", "错误"]), active_spot
+    except Exception as exc:
+        print(f"快照更新不可用，保留完整历史缓存：{type(exc).__name__}: {exc}", flush=True)
+        if LATEST_FILE.exists():
+            active_spot = pd.read_csv(LATEST_FILE, dtype={"代码": str})
+        else:
+            active_spot = snapshot_from_history(daily, names)
+            active_spot.to_csv(LATEST_FILE, index=False, encoding="utf-8-sig")
+        return daily, pd.DataFrame(columns=["代码", "错误"]), active_spot
+
+
 def calculate_metrics(daily):
     columns = ["日期", "代码", "收盘", "成交量", "成交额", "涨跌幅"]
     frame = daily[columns].copy()
@@ -640,12 +683,18 @@ setRange(90,document.getElementById('range60'));
 def main():
     parser = argparse.ArgumentParser(description="生成A股流动性与市场宽度量化看板")
     parser.add_argument("--refresh", action="store_true", help="重新抓取全A历史行情")
+    parser.add_argument("--snapshot-update", action="store_true", help="使用缓存历史并仅更新最新交易日快照")
     parser.add_argument("--workers", type=int, default=12, help="历史行情抓取线程数")
     parser.add_argument("--limit", type=int, default=0, help="仅用于测试的前N只股票")
     parser.add_argument("--skip-us", action="store_true", help="仅重新生成A股模块")
     parser.add_argument("--output", type=Path, default=OUTPUT_FILE, help="HTML输出路径")
     args = parser.parse_args()
-    daily, failures, active_spot = load_or_fetch(args.refresh, args.workers, args.limit)
+    if args.refresh and args.snapshot_update:
+        parser.error("--refresh 与 --snapshot-update 不能同时使用")
+    if args.snapshot_update:
+        daily, failures, active_spot = load_snapshot_update()
+    else:
+        daily, failures, active_spot = load_or_fetch(args.refresh, args.workers, args.limit)
     print("计算市场宽度、ARMS、Amihud与两融指标...", flush=True)
     metrics, frame = calculate_metrics(daily)
     metrics.to_csv(METRICS_FILE, index=False, encoding="utf-8-sig", float_format="%.6f")

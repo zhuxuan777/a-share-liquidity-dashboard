@@ -50,7 +50,7 @@ jobs:
           restore-keys: a-share-dashboard-data-
 
       - name: Build current dashboard
-        run: python build_dashboard.py --refresh --workers 12 --output index.html
+        run: python build_dashboard.py --snapshot-update --workers 12 --output index.html
 
       - name: Package GitHub Pages site
         run: |
