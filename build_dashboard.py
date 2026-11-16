@@ -12,7 +12,7 @@ import warnings
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import akshare as ak
+import eastmoney as em
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -26,6 +26,7 @@ CACHE_FILE = DATA_DIR / "all_a_daily.csv.gz"
 METRICS_FILE = DATA_DIR / "market_metrics.csv"
 LATEST_FILE = DATA_DIR / "latest_stock_snapshot.csv"
 FAILURES_FILE = DATA_DIR / "fetch_failures.csv"
+BOOTSTRAP_FILE = BASE_DIR / "a_share_codes.csv"
 OUTPUT_FILE = BASE_DIR / "A股流动性与市场宽度看板.html"
 START_DATE = "20251101"
 END_DATE = dt.datetime.now(ZoneInfo("Asia/Shanghai")).date().strftime("%Y%m%d")
@@ -36,14 +37,7 @@ MARGIN_URL = "https://data.eastmoney.com/rzrq/zhtjday.html"
 def fetch_history(code, start_date, end_date, retries=3):
     for attempt in range(retries):
         try:
-            frame = ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date,
-                end_date=end_date,
-                adjust="qfq",
-                timeout=20,
-            )
+            frame = em.stock_history(code, start_date, end_date)
             if frame is None or frame.empty:
                 return code, frame, None
             frame = frame.copy()
@@ -55,15 +49,33 @@ def fetch_history(code, start_date, end_date, retries=3):
             time.sleep(0.6 * (attempt + 1))
 
 
-def fetch_spot_with_retry(retries=5):
+def fetch_spot_with_retry(retries=3):
     for attempt in range(retries):
         try:
-            return ak.stock_zh_a_spot_em()
+            return em.stock_spot()
         except Exception as exc:
             if attempt == retries - 1:
                 raise
             print(f"全A快照第 {attempt + 1} 次获取失败：{type(exc).__name__}: {exc}", flush=True)
             time.sleep(2 ** attempt)
+
+
+def snapshot_from_history(daily, names):
+    ordered = daily.sort_values(["代码", "日期"]).copy()
+    ordered["昨收"] = ordered.groupby("代码")["收盘"].shift(1)
+    latest = ordered.groupby("代码", as_index=False).tail(1).copy()
+    name_map = names.drop_duplicates("代码").set_index("代码")["名称"]
+    latest["名称"] = latest["代码"].map(name_map)
+    latest["最新价"] = latest["收盘"]
+    latest["今开"] = latest["开盘"]
+    latest["换手率"] = latest.get("换手率", np.nan)
+    columns = [
+        "代码", "名称", "最新价", "涨跌幅", "涨跌额", "成交量", "成交额", "振幅",
+        "最高", "最低", "今开", "昨收", "换手率",
+    ]
+    result = latest[columns].sort_values("代码").reset_index(drop=True)
+    result.insert(0, "序号", range(1, len(result) + 1))
+    return result
 
 
 def load_or_fetch(refresh, workers, limit):
@@ -78,18 +90,24 @@ def load_or_fetch(refresh, workers, limit):
     try:
         spot = fetch_spot_with_retry()
     except Exception:
-        if not CACHE_FILE.exists():
+        if BOOTSTRAP_FILE.exists():
+            print("全A列表不可用，改用代码引导清单逐股刷新。", flush=True)
+            spot = pd.read_csv(BOOTSTRAP_FILE, dtype={"代码": str})
+            spot["最新价"] = np.nan
+        elif CACHE_FILE.exists():
+            print("全A列表和代码清单不可用，使用现有缓存。", flush=True)
+            daily = pd.read_csv(CACHE_FILE, dtype={"代码": str})
+            daily["日期"] = pd.to_datetime(daily["日期"])
+            active_spot = pd.read_csv(LATEST_FILE, dtype={"代码": str}) if LATEST_FILE.exists() else pd.DataFrame()
+            return daily, pd.DataFrame(columns=["代码", "错误"]), active_spot
+        else:
             raise
-        print("全A快照不可用，使用现有缓存；网页将保留缓存对应的行情日期。", flush=True)
-        daily = pd.read_csv(CACHE_FILE, dtype={"代码": str})
-        daily["日期"] = pd.to_datetime(daily["日期"])
-        active_spot = pd.read_csv(LATEST_FILE, dtype={"代码": str}) if LATEST_FILE.exists() else pd.DataFrame()
-        return daily, pd.DataFrame(columns=["代码", "错误"]), active_spot
     spot["代码"] = spot["代码"].astype(str).str.zfill(6)
     spot = spot[spot["代码"].str.fullmatch(r"\d{6}")].copy()
     spot = spot.drop_duplicates("代码")
     active_spot = spot[spot["最新价"].notna()].copy()
-    active_spot.to_csv(LATEST_FILE, index=False, encoding="utf-8-sig")
+    if not active_spot.empty:
+        spot[["代码", "名称"]].to_csv(BOOTSTRAP_FILE, index=False, encoding="utf-8-sig")
     codes = spot["代码"].tolist()
     if limit:
         codes = codes[:limit]
@@ -119,6 +137,9 @@ def load_or_fetch(refresh, workers, limit):
     daily = pd.concat(frames, ignore_index=True)
     daily["日期"] = pd.to_datetime(daily["日期"])
     daily = daily.sort_values(["代码", "日期"]).reset_index(drop=True)
+    if active_spot.empty:
+        active_spot = snapshot_from_history(daily, spot[["代码", "名称"]])
+    active_spot.to_csv(LATEST_FILE, index=False, encoding="utf-8-sig")
     daily.to_csv(CACHE_FILE, index=False, compression="gzip", encoding="utf-8-sig")
     failure_frame = pd.DataFrame(failures, columns=["代码", "错误"])
     failure_frame.to_csv(FAILURES_FILE, index=False, encoding="utf-8-sig")
@@ -209,15 +230,13 @@ def calculate_metrics(daily):
     metrics["ARMS_A_MA5"] = metrics["ARMS_A"].rolling(5, min_periods=3).mean()
     metrics["LogARMS_A"] = np.log(metrics["ARMS_A"])
 
-    index_frame = ak.index_zh_a_hist(
-        symbol="000300", period="daily", start_date=START_DATE, end_date=END_DATE
-    )
+    index_frame = em.index_history("000300", START_DATE, END_DATE)
     index_frame["日期"] = pd.to_datetime(index_frame["日期"])
     index_frame["沪深300涨跌幅"] = pd.to_numeric(index_frame["涨跌幅"], errors="coerce")
     metrics = metrics.merge(index_frame[["日期", "沪深300涨跌幅"]], on="日期", how="left")
     metrics["权重个股偏离"] = metrics["沪深300涨跌幅"] - metrics["个股收益中位数"]
 
-    margin = ak.stock_margin_account_info()
+    margin = em.margin_account_info()
     margin["日期"] = pd.to_datetime(margin["日期"])
     for column in ["融资余额", "融资买入额", "平均维持担保比例"]:
         margin[column] = pd.to_numeric(margin[column], errors="coerce")
