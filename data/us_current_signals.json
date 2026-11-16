@@ -1,0 +1,44 @@
+{
+  "generated": "2026-11-04T23:18:21",
+  "amp_on": 1,
+  "amp_evaluable": 4,
+  "amp_status": "partial",
+  "recovery_met": 5,
+  "recovery_evaluable": 5,
+  "basis_score": 91.3529411764706,
+  "errors": {},
+  "gex": {
+    "SPY": {
+      "symbol": "SPY",
+      "asof": "2026-11-04",
+      "spot": 767.93,
+      "net_gex": -1.6360106870161117,
+      "contracts": 2026,
+      "expiries": 10,
+      "source": "Cboe delayed option chain; homebrew calls + / puts −"
+    },
+    "QQQ": {
+      "symbol": "QQQ",
+      "asof": "2026-11-04",
+      "spot": 698.86,
+      "net_gex": -3.14105936428438,
+      "contracts": 1970,
+      "expiries": 10,
+      "source": "Cboe delayed option chain; homebrew calls + / puts −"
+    }
+  },
+  "crypto": {
+    "BTC": {
+      "rate_pct": 0.0073,
+      "field": "funding_rate",
+      "source": "Gate.io USDT perpetual",
+      "fetched": "2026-11-04T15:18:15.384970+00:00"
+    },
+    "ETH": {
+      "rate_pct": 0.0055000000000000005,
+      "field": "funding_rate",
+      "source": "Gate.io USDT perpetual",
+      "fetched": "2026-11-04T15:18:15.646819+00:00"
+    }
+  }
+}
