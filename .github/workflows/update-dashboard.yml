@@ -42,6 +42,13 @@ jobs:
       - name: Check Python syntax
         run: python -m py_compile build_dashboard.py us_modules.py
 
+      - name: Restore generated data cache
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: a-share-dashboard-data-${{ github.run_id }}
+          restore-keys: a-share-dashboard-data-
+
       - name: Build current dashboard
         run: python build_dashboard.py --refresh --workers 12 --output index.html
 

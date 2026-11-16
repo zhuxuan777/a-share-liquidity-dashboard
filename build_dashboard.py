@@ -55,6 +55,17 @@ def fetch_history(code, start_date, end_date, retries=3):
             time.sleep(0.6 * (attempt + 1))
 
 
+def fetch_spot_with_retry(retries=5):
+    for attempt in range(retries):
+        try:
+            return ak.stock_zh_a_spot_em()
+        except Exception as exc:
+            if attempt == retries - 1:
+                raise
+            print(f"全A快照第 {attempt + 1} 次获取失败：{type(exc).__name__}: {exc}", flush=True)
+            time.sleep(2 ** attempt)
+
+
 def load_or_fetch(refresh, workers, limit):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if CACHE_FILE.exists() and not refresh:
@@ -64,7 +75,16 @@ def load_or_fetch(refresh, workers, limit):
         return daily, pd.DataFrame(columns=["代码", "错误"]), pd.DataFrame()
 
     print("获取全A股票列表与最新快照...", flush=True)
-    spot = ak.stock_zh_a_spot_em()
+    try:
+        spot = fetch_spot_with_retry()
+    except Exception:
+        if not CACHE_FILE.exists():
+            raise
+        print("全A快照不可用，使用现有缓存；网页将保留缓存对应的行情日期。", flush=True)
+        daily = pd.read_csv(CACHE_FILE, dtype={"代码": str})
+        daily["日期"] = pd.to_datetime(daily["日期"])
+        active_spot = pd.read_csv(LATEST_FILE, dtype={"代码": str}) if LATEST_FILE.exists() else pd.DataFrame()
+        return daily, pd.DataFrame(columns=["代码", "错误"]), active_spot
     spot["代码"] = spot["代码"].astype(str).str.zfill(6)
     spot = spot[spot["代码"].str.fullmatch(r"\d{6}")].copy()
     spot = spot.drop_duplicates("代码")
