@@ -73,22 +73,73 @@ def kline_frame(data, code):
     return frame
 
 
+def tencent_stock_history(code, start_date, end_date):
+    market = "sh" if code.startswith("6") else ("bj" if code.startswith(("4", "8", "9")) else "sz")
+    symbol = market + code
+    start = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
+    end = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
+    url = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
+    params = {"param": f"{symbol},day,{start},{end},400,qfq"}
+    for attempt in range(3):
+        try:
+            response = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+            response.raise_for_status()
+            payload = response.json()
+            break
+        except (requests.RequestException, ValueError):
+            if attempt == 2:
+                raise
+            time.sleep(0.6 * (2 ** attempt))
+    data = (payload.get("data") or {}).get(symbol) or {}
+    rows = data.get("qfqday") or data.get("day") or []
+    if not rows:
+        return pd.DataFrame()
+    raw = pd.DataFrame(rows)
+    frame = pd.DataFrame({
+        "日期": pd.to_datetime(raw[0], errors="coerce"),
+        "股票代码": code,
+        "开盘": pd.to_numeric(raw[1], errors="coerce"),
+        "收盘": pd.to_numeric(raw[2], errors="coerce"),
+        "最高": pd.to_numeric(raw[3], errors="coerce"),
+        "最低": pd.to_numeric(raw[4], errors="coerce"),
+        "成交量": pd.to_numeric(raw[5], errors="coerce") / (100 if code.startswith(("688", "689")) else 1),
+        "成交额": pd.to_numeric(raw[8], errors="coerce") * 10000,
+        "换手率": pd.to_numeric(raw[7], errors="coerce"),
+    })
+    previous = frame["收盘"].shift(1)
+    frame["涨跌幅"] = ((frame["收盘"] / previous - 1) * 100).round(2)
+    frame["涨跌额"] = (frame["收盘"] - previous).round(2)
+    frame["振幅"] = ((frame["最高"] - frame["最低"]) / previous * 100).round(2)
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    frame = frame[(frame["日期"] >= start_ts) & (frame["日期"] <= end_ts)].copy()
+    frame["日期"] = frame["日期"].dt.date
+    return frame[["日期", "股票代码", "开盘", "收盘", "最高", "最低", "成交量", "成交额", "振幅", "涨跌幅", "涨跌额", "换手率"]]
+
+
 def stock_history(code, start_date, end_date):
     market = 1 if code.startswith("6") else 0
-    data = get_json(
-        "https://push2his.eastmoney.com/api/qt/stock/kline/get",
-        {
-            "fields1": "f1,f2,f3,f4,f5,f6",
-            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-            "ut": UT,
-            "klt": "101",
-            "fqt": "1",
-            "secid": f"{market}.{code}",
-            "beg": start_date,
-            "end": end_date,
-        },
-    ).get("data")
-    return kline_frame(data, code)
+    try:
+        data = get_json(
+            "https://push2his.eastmoney.com/api/qt/stock/kline/get",
+            {
+                "fields1": "f1,f2,f3,f4,f5,f6",
+                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+                "ut": UT,
+                "klt": "101",
+                "fqt": "1",
+                "secid": f"{market}.{code}",
+                "beg": start_date,
+                "end": end_date,
+            },
+            retries=1,
+        ).get("data")
+        frame = kline_frame(data, code)
+        if not frame.empty:
+            return frame
+    except (requests.RequestException, ValueError, KeyError):
+        pass
+    return tencent_stock_history(code, start_date, end_date)
 
 
 def index_history(code, start_date, end_date):
