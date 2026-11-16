@@ -46,8 +46,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data
-          key: a-share-dashboard-data-${{ github.run_id }}
-          restore-keys: a-share-dashboard-data-
+          key: a-share-dashboard-data-v2-${{ github.run_id }}
+          restore-keys: a-share-dashboard-data-v2-
 
       - name: Build current dashboard
         run: python build_dashboard.py --snapshot-update --workers 12 --output index.html
